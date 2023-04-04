@@ -1,22 +1,10 @@
-library(rstudioapi)
-library(dplyr)
-current_path = rstudioapi::getActiveDocumentContext()$path 
-setwd(dirname(current_path ))
-rm(list=ls())
-
-library(tidyverse)
-# package to compute
-# cross - validation methods
+library(gbm)
 library(caret)
 
+# Load data
 load("class_data.Rdata")
-y <- as.factor(y)
-levels(y) <- make.names(y)
-glimpse(x)
-table(y)
 
-set.seed(123)
-
+# Define hyperparameter grid for boosting
 hyper_grid <- expand.grid(
   interaction.depth = c(5, 9, 15, 25),
   n.trees = c(500, 1000),
@@ -59,12 +47,14 @@ for (i in seq_along(outer_folds)) {
     y_val <- y_train[val_indices]
     
     # Train a gbm model using this set of hyperparameters
-    model <- gbm(x = x_train_inner, y = y_train_inner,
+    model <- gbm(formula = y_train_inner ~ .,
+                 data= data.frame(x_train_inner, y = y_train_inner),
                  distribution = "bernoulli",
                  interaction.depth = hyper_grid$interaction.depth,
                  n.trees = hyper_grid$n.trees,
                  shrinkage = hyper_grid$shrinkage,
-                 n.minobsinnode = hyper_grid$n.minobsinnode,
+                 n.minobsinnode = hyper_grid$n.minobsinnode[1],
+                 bag.fraction = 0.5,
                  verbose = FALSE)
     
     # Make predictions on the validation set
@@ -87,8 +77,18 @@ for (i in seq_along(outer_folds)) {
     slice(1) %>%
     pull(hyperparameters)
   
-  # Train a final gbm model using the best set of hyperparameters and all the training data
-  final_model <- gbm(x = x_train, y = y_train,
+  # Train a gbm model using the best hyperparameters on the full training set for this fold
+  final_model <- gbm(formula = y_train ~ .,
+                     data = data.frame(x_train, y = y_train),
                      distribution = "bernoulli",
-                     interaction.depth
-                     
+                     interaction.depth = best_hyperparameters$interaction.depth,
+                     n.trees = best_hyperparameters$n.trees,
+                     shrinkage = best_hyperparameters$shrinkage,
+                     n.minobsinnode = best_hyperparameters$n.minobsinnode,
+                     verbose = FALSE
+  )
+  
+  # Evaluate the final model on the test set
+  y_pred <- predict(final_model, newdata = data.frame(x_test),type="response")
+  auc <- caret::roc(y_test, y_pred)$auc
+}
