@@ -9,8 +9,10 @@ library(ISLR)
 library(MASS)
 library(tree)
 library(randomForest)
-# library(caret)
+library(gbm)
+library(glmnet)
 load("class_data.RData")
+
 
 # Make training and test set
 y_up=ifelse(y==0,"No","Yes")
@@ -59,7 +61,7 @@ mean(svm.pred==y_up[-train])
 # Lets fit a random forest and see how well it performs. 
 # We will use the response `medv`, the median housing value (in \$1K dollars)
 # rf.boston=randomForest(y_up~.,data=x,subset=train,mtry=500,ntree=500)
-# pred=predict(fit,x[-train,])
+# pred=predict(rf.boston,x[-train,])
 # some_err <- 1 - mean(pred == x[-train,]$y_up)
 # rf.boston
 # 
@@ -76,9 +78,11 @@ mean(svm.pred==y_up[-train])
 # legend("topright",legend=c("Test", "OOB"),pch=19,col=c("red","blue"))
 
 
+
 #With boosting, the number of trees is a tuning parameter, and if we have too many we can overfit. 
 #We use cross-validation to choose the number of trees
-boost.boston=gbm(y_up~.,data=x[train,],distribution="gaussian",n.trees=10000,shrinkage=0.001,interaction.depth=9,cv.fold=10)
+boost.boston=gbm(y_up~.,data=x[train,],distribution="multinomial",n.trees=500,shrinkage=0.001,interaction.depth=9,cv.fold=10)
 n.trees.cv=gbm.perf(boost.boston, method = "cv")
-gbmpred=predict(boost.boston,newdata=x[-train,],n.trees=n.trees.cv)
-boost_err = 1-mean(gbmpred == x[-train,]$y_up)
+gbmpred=predict.gbm(boost.boston,newdata=x[-train,],n.trees=n.trees.cv, type = "response")
+class_names = colnames(gbmpred)[apply(gbmpred, 1, which.max)]
+boost_err = 1-mean(class_names == x[-train,]$y_up)
