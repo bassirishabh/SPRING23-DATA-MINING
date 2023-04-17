@@ -8,7 +8,7 @@ library(rstudioapi)
 library(dplyr)
 library(cluster)
 library(NbClust)
-library(MVN)
+
 library(ggplot2)
 library("factoextra")
 library(mclust)
@@ -23,35 +23,35 @@ registerDoParallel(cl)
 set.seed(1234)
 
 load("cluster_data.RData")
-n = nrow(y)
-p = ncol(y)
+num_rows = nrow(y)
+num_cols = ncol(y)
 
-y.std = scale(y)
+scaled_y = scale(y)
 
 # Multivariate normality check
-alp <- (p-2)/(2*p)
-bet <- (n-p-3)/(2*(n-p-1))
-a   <- p/2
-b   <- (n-p-1)/2
+alpha <- (num_cols-2)/(2*num_cols)
+beta <- (num_rows-num_cols-3)/(2*(num_rows-num_cols-1))
+a = num_cols/2
+b = (num_rows-num_cols-1)/2
 
-# result <- mvn(data = setosa, mvnTest = "hz", silent = TRUE)
-# result$multivariateNormality
+install.packages("MVN")
+library(MVN)
+mvn(y) # performs Shapiro-Wilk test for multivariate normality
 
 # Plot beta and u quantiles
-y.std <- scale(y)
-S <- cov(y.std)
-u <- mahalanobis(y.std, colMeans(y.std), S)
-u <- u^2
-pr <- (1:n - alp)/(n - alp - bet + 1)
-quantiles <- qbeta(pr, a, b)
-df <- data.frame(u=sort(u), quantiles=quantiles)
-ggplot(df, aes(x=quantiles, y=u)) +
+u = mahalanobis(scaled_y, colMeans(scaled_y), cov(scaled_y))
+u = u^2
+pr = (1:num_rows - alpha)/(num_rows - alpha - beta + 1)
+quantiles = qbeta(pr, a, b)
+data_frame = data.frame(u=sort(u), quantiles=quantiles)
+ggplot(data_frame, aes(x=quantiles, y=u)) +
   geom_line() +
   labs(x="beta quantile", y="u quantile") +
   ggtitle("Checking Multivariate Normality") +
   theme(plot.title = element_text(hjust = 0.5))
 
-pca <- prcomp(y.std, center = TRUE, scale. = TRUE)
+# Implementing Feature Selection using PCA
+pca <- prcomp(scaled_y, center = TRUE, scale. = TRUE)
 
 # Calculate the cumulative proportion of variance explained by each principal component
 variance_explained <- cumsum(pca$sdev^2 / sum(pca$sdev^2))
@@ -65,46 +65,51 @@ y_pca_90 <- pca$x[,1:n_components_90]
 y_pca_95 <- pca$x[,1:n_components_95]
 y_pca_99 <- pca$x[,1:n_components_99]
 
-pc.ind = c(n_components_90, n_components_95, n_components_99)
-PCs.sub = lapply(pc.ind, function(x) pca$x[,1:x])
+pca_indices = c(n_components_90, n_components_95, n_components_99)
+pca_subsets_y = lapply(pca_indices, function(x) pca$x[,1:x])
 
-#kmeans # use Calinski and Harabasz (1974) ch index
-ch.index = function(x,kmax,iter.max=100,nstart=25)
+# kmeans
+get_scores_kmeans = function(x,kmax,iter.max=100,nstart=20)
 {
   ch = numeric(length=kmax-1)
   silwid = numeric(length=kmax-1)
   n = nrow(x)
   for (k in 2:kmax) {
+
+    # Apply Kmeans
     a = kmeans(x,k,iter.max=iter.max,nstart=nstart)
+    
+    # Calculate Silhouette Score for each K
+    ss <- silhouette(a$cluster, dist(x))
+    silwid[k-1] <- mean(ss[, 3])
+
+    # Calculate CH Score for each K
     w = a$tot.withinss
     b = a$betweenss
     ch[k-1] = (b/(k-1))/(w/(n-k))
-    
-    ss <- silhouette(a$cluster, dist(x))
-    silwid[k-1] <- mean(ss[, 3])
   }
-  return(list(k=2:kmax,ch=ch, sil = silwid))
+  return(list(k=2:kmax,sil = silwid, ch=ch))
 }
 
-ch = lapply(PCs.sub, ch.index, kmax=25)
+kmeans_scores = lapply(pca_subsets_y, get_scores_kmeans, kmax=20)
 
-# Plotting CH and silhoutte results
-ch_90 <- ch[[1]]
-ch_95 <- ch[[2]]
-ch_99 <- ch[[3]]
+# Plotting CH and silhoutte results for Kmeans
+score_90 <- kmeans_scores[[1]]
+score_95 <- kmeans_scores[[2]]
+score_99 <- kmeans_scores[[3]]
 
 # Extract variables for plotting
-k_90 <- ch_90$k
-ch_val_90 <- ch_90$ch
-sil_score_90 <- ch_90$sil
+k_90 <- score_90$k
+ch_val_90 <- score_90$ch
+sil_score_90 <- score_90$sil
 
-k_95 <- ch_95$k
-ch_val_95 <- ch_95$ch
-sil_score_95 <- ch_95$sil
+k_95 <- score_95$k
+ch_val_95 <- score_95$ch
+sil_score_95 <- score_95$sil
 
-k_99 <- ch_99$k
-ch_val_99 <- ch_99$ch
-sil_score_99 <- ch_99$sil
+k_99 <- score_99$k
+ch_val_99 <- score_99$ch
+sil_score_99 <- score_99$sil
 
 # Find the maximum values for ch_val and sil_score
 max_ch_val_90 <- k_90[which.max(ch_val_90)]
@@ -256,7 +261,7 @@ fviz_nbclust(nbc_90)
 fviz_nbclust(nbc_99)
 
 
-# K is finalized, Now we perform Different Clustering Methods
+# K is finalized to 3, Now we perform Different Clustering Methods
 
 ### Kmeans
 set.seed(123)
@@ -272,38 +277,33 @@ fviz_cluster(km.res, data = y_pca_99,
 
 ### Gaussian mixture model (GMM)
 library(mclust)
-gmm = Mclust(PCs.sub[[3]], G = 3)
-plot(PCs.sub[[3]],col=gmm$classification,cex=2,pch=1,lwd=2)
+gmm = Mclust(pca_subsets_y[[1]], G = 10)
+plot(pca_subsets_y[[1]],col=gmm$classification,cex=2,pch=1,lwd=2)
 
 
 ### Hierarchical Clustering
 # Function to get within and between cluster sum of squares from hclust
-clust.SS = function(data, cluster){
-  
+get_sum_of_squares = function(data, cluster){
+  wss = list()
   twss = vector()
   tss = vector()
   bss = vector()
-  wss = list()
   cluster = as.matrix(cluster)
-  
-  for(j in seq_len(ncol(cluster))){
+  for(index in seq_len(ncol(cluster))){
     ss = aggregate(data, 
-                   by=list(cluster[,j]), 
+                   by=list(cluster[,index]), 
                    function(x) sum(scale(x, scale=F)**2))
-    wss[[j]] = rowSums(ss[,-1])
-    twss[j] = sum(ss[,-1])
-    tss[j] = sum(scale(data, scale=F)**2)
-    bss[j] = tss[j] - twss[j]
+    wss[[index]] = rowSums(ss[,-1])
+    twss[index] = sum(ss[,-1])
+    tss[index] = sum(scale(data, scale=F)**2)
+    bss[index] = tss[index] - twss[index]
   }
-  
-  ss.all = list(tss=tss, wss=wss, twss=twss, bss=bss)
-  
-  return(ss.all) 
-  
+  ss.all = list(wss=wss, twss=twss, tss=tss, bss=bss)
+  return(ss.all)
 }
 
 #function for computing CH index
-ch.index2 = function(data, kmax, twss, bss){
+get_scores_for_hierarchical = function(data, kmax, twss, bss){
   
   ch = numeric(length=kmax-1)
   n = nrow(data)
@@ -316,7 +316,7 @@ ch.index2 = function(data, kmax, twss, bss){
 }
 
 # Get distances for all subsets of the PC space considered
-dists = lapply(PCs.sub, dist)
+dists = lapply(pca_subsets_y, dist)
 
 hc.complete = lapply(dists, hclust, method="complete")
 hc.single   = lapply(dists, hclust, method="single")
@@ -333,7 +333,7 @@ plot.ch.wss = function(ch.list, wss.list, linkage){
     axis(1, labels=F)
     abline(v = which.max(data$ch)+1, col=2)
     if(i==1) title(ylab="CH Index", line=2, font.lab=2, cex.lab=1.2)
-    title(main=paste(pc.ind[i], "Components Kept"), line = .5)
+    title(main=paste(pca_indices[i], "Components Kept"), line = .5)
   }
   for(i in 1:3){
     data = wss.list[[i]]
@@ -341,30 +341,36 @@ plot.ch.wss = function(ch.list, wss.list, linkage){
     title(xlab = "K", font.lab=2, line = 2)
     if(i==1) title(ylab="Total WSS", line=2, cex.lab=1.2, font.lab=2)
   }
-  title(paste("CH Index and Total WSS For", linkage,  "Linkage Clustering Across PC Spaces"), outer=T, line=-1)
+  title(paste("CH Index and Total WSS For", linkage,
+              "Linkage Clustering Across PC Spaces"), 
+        outer=T, line=-1)
 }
-
 
 methods = c("Complete", "Single", "Average")
 
 for(method in seq_along(clusts)){
   print(method)
-  cuts = lapply(clusts[[method]], function(x) cutree(x,k=2:25))
-  ss = mapply(clust.SS, cluster=cuts, data=list(y_pca_90, y_pca_99), SIMPLIFY = F)
-  ch = lapply(ss, function(x) ch.index2(data=y, kmax=25, twss=x$twss, bss=x$bss))
-  pdf(paste0("ch2_", methods[method], ".pdf"))
+  cuts = lapply(clusts[[method]], function(x) cutree(x,k=2:20))
+  ss = mapply(get_sum_of_squares, cluster=cuts, data=pca_subsets_y, SIMPLIFY = F)
+  ch = lapply(ss, function(x) get_scores_for_hierarchical(data=y, kmax=20, 
+                                                      twss=x$twss, bss=x$bss))
+  pdf(paste0("ch_", methods[method], ".pdf"))
   plot.ch.wss(ch, ss, linkage=methods[method])
   dev.off()
 }
 
 ### DBSCAN
-kNNdistplot(PCs.sub[[3]], k=4)
+kNNdistplot(pca_subsets_y[[3]], k=4)
 abline(h=35, col="red")
 set.seed(1234)
-db = hdbscan(PCs.sub[[3]], minPts = 3)
+db = hdbscan(pca_subsets_y[[3]], minPts = 3)
 
-kNNdistplot(PCs.sub[[3]], k=4)
+kNNdistplot(pca_subsets_y[[3]], k=4)
 abline(h=40, col="green")
 set.seed(1234)
-db = hdbscan(PCs.sub[[3]], minPts = 3)
+db = hdbscan(pca_subsets_y[[3]], minPts = 3)
+
+
+### OPTICS
+
 
